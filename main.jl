@@ -7,6 +7,8 @@ using Graphs
 using Plots
 using Dierckx
 using Serialization
+using TranscodingStreams
+using CodecZstd
 #using Mux, WebIO, Interact
 
 ## Get image
@@ -31,8 +33,9 @@ end
 struct Segment
     curve :: ParametricSpline
     kant :: Int
+    buiten :: Bool
     corners :: Tuple{Vector{Float64}, Vector{Float64}}
-    cornerspixel :: Tuple{CartesianIndex{2},CartesianIndex{2}}
+    cornerspixel :: Tuple{CartesianIndex{2},CartesianIndex{2}} 
     # todo colors
 end
 
@@ -164,7 +167,7 @@ function makenormalizedpoints(
             (tl,bl,tr,br) :: NTuple{4, CartesianIndex{2}}, 
             bordercoords :: Vector{CartesianIndex{2}}
         ) :: Tuple{NTuple{4, Vector{Float64}},Vector{Vector{Float64}}}
-    scale = maximum(Tuple(br - tl))
+    scale = 1 #maximum(Tuple(br - tl))
     function f(c)
         (y,x) = Tuple(c .- tl)
         return [x/scale, y/scale] #Point(x/scale, y/scale, img[c])
@@ -237,11 +240,15 @@ function makeFittedSegments(
         mat = [cos(angle) -sin(angle); sin(angle) cos(angle)]
         seg = map(v -> mat*v, seg)
 
+        yvals = getindex.(seg,2)
+        highest = maximum(yvals)
+        lowest = minimum(yvals)
+        buiten = abs(highest) < abs(lowest) # y=0 is hier nog top en positief is naar onder
+
         xyvals = stack((getindex.(seg,1), getindex.(seg,2)), dims=1)
-        println(kant)
         spline = ParametricSpline(xyvals; s=ss[kant]) #s=0.0006
         
-        segs[kant] = Segment(spline, kant, corners, cornersp)
+        segs[kant] = Segment(spline, kant, buiten, corners, cornersp)
 
         kant += 1
     end
@@ -315,7 +322,7 @@ function comparesplinematchplot(spline1,spline2)
     output1x = output1[1, :]
     output1y = output1[2, :]
     output2 = spline2(tvals)
-    output2x = 1 .-output2[1, :]
+    output2x = spline2(1.0)[1] .-output2[1, :]
     output2y = -output2[2, :]
 
     plot!(output1x, output1y)
@@ -338,7 +345,7 @@ function plotstukjesplines(stukje :: Stukje)
         outputx = output[1, :] .+ c1[1]
         outputy = output[2, :] .+ c1[2]
 
-        plot!(outputx, outputy)
+        plot!(outputx, outputy; label=(rand.buiten ? "uit" : "in"))
     end
     display(plt)
 end
@@ -372,11 +379,18 @@ function saveState(state :: State)
 end
 
 function saveStukje(stukje :: Stukje, id :: Int64)
-    serialize(string("data/stukje", id), stukje)
+    io = open(string("data/stukje", id), "w")
+    io = TranscodingStream(ZstdCompressor(), io)
+    serialize(io, stukje)
+    close(io)
 end
 
 function loadStukje(id :: Int64) :: Stukje
-    return deserialize(string("data/stukje", id))
+    io = open(string("data/stukje", id))
+    io = TranscodingStream(ZstdDecompressor(), io)
+    val = deserialize(io)
+    close(io)
+    return val
 end
 
 function loadState() :: State
@@ -460,7 +474,7 @@ segments = getSegments(cornersnorm, bordercoordsn); plotsegment(segments[1]); pl
 println(map(s -> collect(Iterators.take(reverse(s),10)),segments))
 
 #### maak fits
-ss = [0.005,0.005,0.005,0.005];
+ss = [5000,5000,5000,5000];
 stukje = makeStukje(corners,cornersnorm,segments, rawimg, bounds, params, ss); plotstukjesplines(stukje)
 
 #### Sorteer passende stukjes
@@ -488,7 +502,7 @@ function comparesplinematchnorm(spline1,spline2)
     x1s = output1[1, :]
     y1s = output1[2, :]
     output2 = spline2(tvals)
-    x2s = 1 .-output2[1, :]
+    x2s = spline2(1.0)[1] .-output2[1, :]
     y2s = -output2[2, :]
     zipped = zip(x1s,y1s,x2s,y2s)
     return sum(splat((x1,y1,x2,y2) -> (x1-x2)^2 + (y1-y2)^2), zipped)

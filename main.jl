@@ -22,6 +22,11 @@ function getNewestImage()
     return img
 end
 
+function getIPImage(address)
+    img = load(address)
+    return img
+end
+
 ## STRUCTS
 struct Bounds
     ytop :: Int64
@@ -268,7 +273,7 @@ function testwindow(xleft, ytop, width ,height)
     display(img)
 end
 
-function useBounds(xleft, ytop, width ,height)
+function useBounds(rawimg, xleft, ytop, width ,height)
     xright = xleft + width
     ybottom = ytop + height
     bounds = Bounds(ytop, ybottom, xleft, xright)
@@ -328,7 +333,25 @@ function comparesplinematchplot(spline1,spline2)
     plot!(output1x, output1y)
     plot!(output2x, output2y)
     display(plt)
+    return plt
 end
+
+
+function comparesplinematchnorm(spline1,spline2)
+    plt = plot(aspect_ratio=:equal, yflip=true, size=(1000,1000))
+    tvals = range(0.0, 1.0, 10000)
+    
+    output1 = spline1(tvals)
+    x1s = output1[1, :]
+    y1s = output1[2, :]
+    output2 = spline2(tvals)
+    x2s = spline2(1.0)[1] .-output2[1, :]
+    y2s = -output2[2, :]
+    zipped = zip(x1s,y1s,x2s,y2s)
+    return sum(splat((x1,y1,x2,y2) -> (x1-x2)^2 + (y1-y2)^2), zipped)
+end
+
+
 
 function plotstukjesplines(stukje :: Stukje)
     plt = plot(aspect_ratio=:equal, yflip=true, size=(1000,1000))
@@ -427,6 +450,56 @@ function registerStukje(st ::State, stukje :: Stukje, conn=nothing)
 end
 
 
+function showstukje(stukje :: Stukje) 
+    b = stukje.rawimgbounds
+    i = stukje.rawimg[b.ytop:b.ybottom, b.xleft:b.xright]
+    display(i)
+    return i
+end
+
+
+function getBestMatches(stukje :: Stukje, st :: State) :: Vector{Tuple{Float64, Int64, NTuple{2, Int64}, Int64}}
+    opties = Vector{Tuple{Float64, Int64, NTuple{2, Int64}, Int64}}(undef, 0)
+
+    for kant in 1:4
+        function m(t)
+            id = t[1]
+            k = t[2]
+            stuk = st.lijstStukjes[id]
+            c1 = stukje.randen[kant].curve
+            c2 = stuk.randen[k].curve
+            score = comparesplinematchnorm(c1,c2)
+            loc = st.posities[id]
+            return (score, kant, t, loc)
+        end
+        function f(t)
+            uit = stukje.randen[kant].buiten
+            id = t[1]
+            k = t[2]
+            stuk = st.lijstStukjes[id]
+            auit = stuk.randen[k].buiten
+            return (uit != auit)
+        end
+
+        kopties = copy(st.openKanten)
+        filter!(f, kopties)
+        kopties = map(m, kopties)
+        append!(opties, kopties)
+    end
+    
+    sort!(opties)
+    return opties
+end
+
+function showBestMatches(stukje :: Stukje, lijst :: Vector{Tuple{Float64, Int64, NTuple{2, Int64}, Int64}}, st :: State)
+    for (score, kant, (id, k), pos) in lijst
+        println(score, " curkant: ", kant, " other: ", (id,k), " at ", pos)
+        comparesplinematchplot(stukje.randen[kant].curve, st.lijstStukjes[id].randen[k].curve)
+        readline()
+        showstukje(st.lijstStukjes[id])
+        readline()
+    end
+end
 
 ######################################################################
 ######################################################################
@@ -451,13 +524,14 @@ saveState(st)
 
 ##### pak nieuwe foto
 #rawimg = getNewestImage()
-rawimg = load("PXL_20241130_141241879.jpg")
+#rawimg = load("PXL_20241130_141241879.jpg")
+getIPImage("http://192.168.2.11:8080/photoaf.jpg")
 size(rawimg)
 
 ##### fix bounding box
 xleft = 1000; ytop = 1600; width = 1500; height = 1500;
 testwindow(xleft, ytop, width ,height)
-(bounds, img) = useBounds(xleft, ytop, width, height); img
+(bounds, img) = useBounds(rawimg, xleft, ytop, width, height); img
 
 ##### maak mask
 params = (1.2,2,0.4,0.7); refinemask(img,params) #params = (1,2,0.5,0.7);
@@ -478,42 +552,14 @@ ss = [5000,5000,5000,5000];
 stukje = makeStukje(corners,cornersnorm,segments, rawimg, bounds, params, ss); plotstukjesplines(stukje)
 
 #### Sorteer passende stukjes
-# TODO
+lijst = getBestMatches(stukje, st)
+showBestMatches(stukje, lijst, st)
 
 
 #### Kies en store
 # registerStukje(st, stukje) of registerStukje(st, stukje, (kant,(id2,k2)))
 registerStukje(st, stukje)
 
-
-
-
-
-
-plotsplines([stukje.randen[1], stukje.randen[2]])
-comparesplinematchplot(stukje.randen[1].curve, stukje.randen[2].curve)
-
-
-function comparesplinematchnorm(spline1,spline2)
-    plt = plot(aspect_ratio=:equal, yflip=true, size=(1000,1000))
-    tvals = range(0.0, 1.0, 10000)
-    
-    output1 = spline1(tvals)
-    x1s = output1[1, :]
-    y1s = output1[2, :]
-    output2 = spline2(tvals)
-    x2s = spline2(1.0)[1] .-output2[1, :]
-    y2s = -output2[2, :]
-    zipped = zip(x1s,y1s,x2s,y2s)
-    return sum(splat((x1,y1,x2,y2) -> (x1-x2)^2 + (y1-y2)^2), zipped)
-end
-
-
-plotsplines([stukje.randen[1], stukje.randen[2]])
-
-
-comparesplinematchplot(stukje.randen[1].curve, st.lijstStukjes[1].randen[2].curve)
-comparesplinematchnorm(stukje.randen[1].curve, st.lijstStukjes[1].randen[2].curve)
 
 
 #### Saveload state
